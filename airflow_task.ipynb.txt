@@ -1,0 +1,95 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "provenance": []
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "r4XCVhFB60zK"
+      },
+      "outputs": [],
+      "source": [
+        "from airflow import DAG\n",
+        "from airflow.operators.python import PythonOperator\n",
+        "from datetime import datetime\n",
+        "import requests\n",
+        "import gzip\n",
+        "import pandas as pd\n",
+        "import sqlalchemy\n",
+        "\n",
+        "def download_pageviews(ds, **kwargs):\n",
+        "    url = \"https://dumps.wikimedia.org/other/pageviews/2024/10/pageviews-20241010-160000.gz\"\n",
+        "    response = requests.get(url)\n",
+        "    with open('/tmp/pageviews.gz', 'wb') as f:\n",
+        "        f.write(response.content)\n",
+        "\n",
+        "def extract_and_filter():\n",
+        "    with gzip.open('/tmp/pageviews.gz', 'rt') as f:\n",
+        "        lines = f.readlines()\n",
+        "    data = [line.split() for line in lines]\n",
+        "    df = pd.DataFrame(data, columns=[\"project\", \"page_name\", \"views\", \"bytes\"])\n",
+        "\n",
+        "    # Filter for specific companies\n",
+        "    companies = [\"Amazon\", \"Apple_Inc.\", \"Meta_Platforms\", \"Google\", \"Microsoft\"]\n",
+        "    filtered_df = df[df['page_name'].isin(companies)]\n",
+        "\n",
+        "    # Connect to the database\n",
+        "    engine = sqlalchemy.create_engine('postgresql://username:password@localhost/db_name')\n",
+        "    filtered_df.to_sql('pageviews', engine, if_exists='replace', index=False)\n",
+        "\n",
+        "def analyze_pageviews():\n",
+        "    engine = sqlalchemy.create_engine('postgresql://username:password@localhost/db_name')\n",
+        "    result = pd.read_sql_query('SELECT page_name, MAX(views) AS max_views FROM pageviews GROUP BY page_name ORDER BY max_views DESC LIMIT 1;', engine)\n",
+        "    print(result)\n",
+        "\n",
+        "# Define the DAG\n",
+        "dag = DAG('wikipedia_pageviews_dag', start_date=datetime(2024, 10, 10), schedule_interval='@hourly')\n",
+        "\n",
+        "# Define the tasks\n",
+        "download_task = PythonOperator(task_id='download_data', python_callable=download_pageviews, dag=dag)\n",
+        "extract_task = PythonOperator(task_id='extract_filter_data', python_callable=extract_and_filter, dag=dag)\n",
+        "analyze_task = PythonOperator(task_id='analyze_data', python_callable=analyze_pageviews, dag=dag)\n",
+        "\n",
+        "# Set up the task dependencies\n",
+        "download_task >> extract_task >> analyze_task"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## SQL Code to Analyze Highest page view."
+      ],
+      "metadata": {
+        "id": "s1XPaGnm-xRt"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "SELECT company_name, MAX(views) AS highest_pageviews\n",
+        "FROM pageviews\n",
+        "GROUP BY company_name\n",
+        "ORDER BY highest_pageviews DESC\n",
+        "LIMIT 1;"
+      ],
+      "metadata": {
+        "id": "kXj2D6jM_Dmd"
+      },
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}
